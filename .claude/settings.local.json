@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs wc *)",
+      "Bash(xargs grep *)",
+      "Bash(grep -n -E \"TODO|FIXME|NotImplemented|placeholder|^\\\\s*pass\\\\s*$\" minicode_next/features/tools/builtin.py minicode_next/ui/tui/input.py minicode_next/ui/tui/runtime.py)",
+      "Bash(python *)",
+      "Read(//c/Users/CVEngineer/.minicode-next/**)",
+      "Bash(pip install *)",
+      "Bash(grep -E '^[[:space:]]+name=\"[a-z_]+\",?$' minicode/features/tools/builtin.py)",
+      "Bash(find minicode *)",
+      "Bash(pytest tests/test_minicode_next_cost.py -q)",
+      "Skill(claude-api)"
+    ]
+  }
+}

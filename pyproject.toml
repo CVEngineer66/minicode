@@ -7,17 +7,24 @@ name = "minicode-py"
 version = "0.1.0"
 description = "A lightweight terminal coding assistant for local development workflows."
 readme = "README.md"
-requires-python = ">=3.11"
-dependencies = []
+requires-python = ">=3.10"
+dependencies = [
+  "langgraph>=1.1.0",
+  "langgraph-checkpoint-sqlite>=3.0.0",
+  "langchain-core>=1.2.0",
+  "langchain-openai>=1.1.0",
+  "langchain-anthropic>=1.4.0",
+  "textual>=0.80",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0"]
 
 [project.scripts]
-minicode-py = "minicode.main:main"
-minicode-gateway = "minicode.gateway:run_gateway"
-minicode-cron = "minicode.cron_runner:main"
-minicode-headless = "minicode.headless:main"
+minicode = "minicode.app.main:main"
+minicode-headless = "minicode.app.headless:main"
+minicode-gateway = "minicode.app.gateway_main:main"
+minicode-cron = "minicode.app.cron_main:main"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -28,4 +35,3 @@ package-dir = {"" = "."}
 
 [tool.setuptools.packages.find]
 where = ["."]
-

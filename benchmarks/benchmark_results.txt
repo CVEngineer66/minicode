@@ -1,12 +1,29 @@
 MiniCode Python Benchmark Results
-================================================================================
+==========================================================================================
 
-render_panel (100 lines)                     0.17 ms  (6012983.23 ops/sec)     0.0 MB  106x8
-render_banner                                0.03 ms  (36464410.74 ops/sec)     0.0 MB  
-string_display_width (avg)                   0.00 ms  (975181627.84 ops/sec)     0.0 MB  4 strings
-render_footer_bar                            0.00 ms  (345482811.21 ops/sec)     0.0 MB  
-estimate_tokens (ASCII only)                 0.00 ms  (470329277.69 ops/sec)     0.0 MB  1200 chars -> 300 tokens
-estimate_tokens (Chinese only)               0.02 ms  (47824968.27 ops/sec)     0.0 MB  400 chars -> 266 tokens
-estimate_tokens (Mixed CJK/ASCII)            0.01 ms  (81133927.78 ops/sec)     0.0 MB  900 chars -> 308 tokens
-estimate_tokens (Code sample)                0.00 ms  (467530038.78 ops/sec)     0.0 MB  1250 chars -> 312 tokens
-estimate_tokens (Long text)                  0.01 ms  (112173141.49 ops/sec)     0.0 MB  6000 chars -> 1500 tokens
+Test                                               Duration        Ops/sec   Memory Details
+------------------------------------------------------------------------------------------
+tui.parse_input (5 inputs)                        0.001 ms  (  725194.7 ops/sec)    0.00 MB  5 samples
+tui.find_matching_slash_commands                  0.059 ms  (   16874.4 ops/sec)    0.00 MB  6 queries
+rich.Markdown render (mixed)                      1.504 ms  (     664.8 ops/sec)    0.00 MB  155 chars
+rich.Text render (markup header)                  0.104 ms  (    9656.4 ops/sec)    0.00 MB  
+dispatcher._fmt_kv (6 keys)                       0.002 ms  (  451214.7 ops/sec)    0.00 MB  
+estimate_tokens (ASCII only)                      0.000 ms  ( 4537205.0 ops/sec)    0.00 MB  1200 chars -> 300 tokens
+estimate_tokens (Chinese only)                    0.000 ms  ( 5864414.8 ops/sec)    0.00 MB  400 chars -> 266 tokens
+estimate_tokens (Mixed CJK/ASCII)                 0.000 ms  ( 5946717.4 ops/sec)    0.00 MB  900 chars -> 308 tokens
+estimate_tokens (Code sample)                     0.000 ms  ( 5740528.2 ops/sec)    0.00 MB  1250 chars -> 312 tokens
+estimate_tokens (Long prose)                      0.000 ms  ( 5737893.0 ops/sec)    0.00 MB  5400 chars -> 1350 tokens
+estimate_messages_tokens (100 msgs)               0.123 ms  (    8146.8 ops/sec)    0.00 MB  6464 tokens
+ContextService.should_compact                     0.127 ms  (    7888.4 ops/sec)    0.00 MB  
+ContextManager.compact (800 msgs)               173.819 ms  (       5.8 ops/sec)    0.00 MB  162800 tokens in
+tool.list_files (recursive, 100 files)           12.556 ms  (      79.6 ops/sec)    0.00 MB  
+tool.read_file (100 lines)                        0.226 ms  (    4427.9 ops/sec)    0.00 MB  
+tool.grep_files (100 files)                       2.029 ms  (     492.7 ops/sec)    0.00 MB  
+tool.file_tree (depth 3)                          7.346 ms  (     136.1 ops/sec)    0.00 MB  
+tool.regex_test (pure CPU)                        0.055 ms  (   18348.1 ops/sec)    0.00 MB  
+ToolGraphAdapter.execute (read_file)              1.080 ms  (     926.2 ops/sec)    0.00 MB  4 gates applied
+bootstrap_services (cold)                        32.087 ms  (      31.2 ops/sec)    0.09 MB  peak RSS delta
+2000 messages + token scan                       31.881 ms  (   62733.5 ops/sec)    2.06 MB  
+ContextManager.compact (peak)                  1299.313 ms  (       0.8 ops/sec)    0.30 MB  
+run_turn (final answer, no tools)                42.145 ms  (      23.7 ops/sec)    0.00 MB  START -> assembly -> model -> finalize
+run_turn (progress + final)                      42.795 ms  (      23.4 ops/sec)    0.00 MB  progress_continue loop once

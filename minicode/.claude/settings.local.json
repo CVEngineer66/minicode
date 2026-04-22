@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/ -v --collect-only)",
+      "Bash(grep -c \"^def \" minicode_next/features/tools/builtin.py)"
+    ]
+  }
+}

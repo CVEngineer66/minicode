@@ -66,7 +66,7 @@ ENV MINI_CODE_LOG_LEVEL=WARNING \
 
 # Health check: verify the CLI entry point works
 HEALTHCHECK --interval=60s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "from minicode.main import main; print('ok')" || exit 1
+    CMD python -c "from minicode.app.main import main; print('ok')" || exit 1
 
 # Switch to non-root user
 USER minicode
