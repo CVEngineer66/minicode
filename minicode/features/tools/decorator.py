@@ -39,6 +39,7 @@ from minicode.core.types import (
     ToolResult,
     ToolSpec,
 )
+from minicode.features.tools.metadata import enrich_input_schema, enrich_tool_description
 
 
 _CONTEXT_PARAM = "context"
@@ -158,14 +159,21 @@ class ToolRegistrar:
         def decorator(func: Callable[..., ToolResult]) -> Callable[..., ToolResult]:
             schema, param_names, wants_context = _build_schema(func)
             resolved_name = name or func.__name__
-            doc = (func.__doc__ or "").strip()
-            resolved_description = description or (doc.split("\n")[0] if doc else f"Tool {resolved_name}")
+            resolved_capability = capability or ToolCapability()
+            resolved_policy = permission_policy or PermissionPolicy(kind=resolved_name)
+            doc = inspect.cleandoc(func.__doc__ or "")
+            resolved_description = enrich_tool_description(
+                name=resolved_name,
+                base_description=description or doc,
+                capability=resolved_capability,
+                permission_policy=resolved_policy,
+            )
             spec = ToolSpec(
                 name=resolved_name,
                 description=resolved_description,
-                input_schema=schema,
-                capability=capability or ToolCapability(),
-                permission_policy=permission_policy or PermissionPolicy(kind=resolved_name),
+                input_schema=enrich_input_schema(resolved_name, schema),
+                capability=resolved_capability,
+                permission_policy=resolved_policy,
                 validator=_passthrough_validator,
                 executor=_make_executor(func, param_names, wants_context),
             )

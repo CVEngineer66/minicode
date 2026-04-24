@@ -14,9 +14,7 @@ from typing import Any
 
 class PermissionMode(str, Enum):
     DEFAULT = "default"
-    AUTO = "auto"
     BYPASS = "bypass"
-    PLAN = "plan"
 
 
 class AutoRiskLevel(str, Enum):
@@ -35,10 +33,6 @@ class RiskAssessment:
     reason: str
     safe_alternative: str | None = None
 
-
-SAFE_TOOLS: frozenset[str] = frozenset({"read_file", "list_files", "grep_files", "load_skill", "file_tree"})
-LOW_RISK_TOOLS: frozenset[str] = frozenset({"run_command"})
-MEDIUM_RISK_TOOLS: frozenset[str] = frozenset({"write_file", "edit_file", "patch_file", "modify_file"})
 
 HIGH_RISK_COMMANDS: tuple[str, ...] = (
     "rm -rf",
@@ -124,14 +118,11 @@ SENSITIVE_FILE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
 
 
 class AutoModeChecker:
-    """Risk classifier used by `auto` permission mode.
+    """Risk classifier used by the two supported execution modes.
 
     Boundaries:
-    - PLAN mode allows only SAFE_TOOLS.
+    - DEFAULT mode always routes risky operations through approval.
     - BYPASS mode approves everything (operator-acknowledged).
-    - DEFAULT mode always prompts.
-    - AUTO mode dispatches per-tool + command/pattern checks; DANGEROUS hits are
-      hard-blocked.
     """
 
     def __init__(self, mode: PermissionMode = PermissionMode.DEFAULT) -> None:
@@ -148,72 +139,11 @@ class AutoModeChecker:
                 "approve",
                 "Bypass mode: all permissions skipped",
             )
-        if self.mode == PermissionMode.PLAN:
-            if tool_name in SAFE_TOOLS:
-                return RiskAssessment(
-                    AutoRiskLevel.SAFE, tool_name, "approve", "Plan mode: read-only tool"
-                )
-            return RiskAssessment(
-                AutoRiskLevel.HIGH, tool_name, "block", "Plan mode: execution not allowed"
-            )
-        if self.mode == PermissionMode.DEFAULT:
-            return RiskAssessment(
-                AutoRiskLevel.MEDIUM, tool_name, "prompt", "Default mode: approval required"
-            )
-        return self._auto(tool_name, tool_input)
-
-    # --- auto-mode internals ---
-    def _auto(self, tool_name: str, tool_input: dict[str, Any]) -> RiskAssessment:
-        if tool_name in SAFE_TOOLS:
-            return RiskAssessment(
-                AutoRiskLevel.SAFE, tool_name, "approve", f"{tool_name} is read-only"
-            )
-        if tool_name == "run_command":
-            return self._assess_command(tool_input)
-        if tool_name in MEDIUM_RISK_TOOLS:
-            return self._assess_file_edit(tool_name, tool_input)
         return RiskAssessment(
-            AutoRiskLevel.MEDIUM, tool_name, "prompt", f"Unknown tool '{tool_name}'"
-        )
-
-    def _assess_command(self, tool_input: dict[str, Any]) -> RiskAssessment:
-        command = tool_input.get("command", "")
-        if isinstance(command, list):
-            command = " ".join(str(p) for p in command)
-        command_str = str(command)
-        for pattern in DANGEROUS_PATTERNS:
-            if pattern.search(command_str):
-                return RiskAssessment(
-                    AutoRiskLevel.DANGEROUS,
-                    "run_command",
-                    "block",
-                    f"Dangerous pattern: {pattern.pattern}",
-                )
-        for risky in HIGH_RISK_COMMANDS:
-            if risky in command_str:
-                return RiskAssessment(
-                    AutoRiskLevel.HIGH,
-                    "run_command",
-                    "prompt",
-                    f"High-risk command: '{risky}'",
-                    safe_alternative=f"Consider a safer alternative to '{risky}'",
-                )
-        return RiskAssessment(
-            AutoRiskLevel.LOW, "run_command", "approve", "Command appears safe"
-        )
-
-    def _assess_file_edit(self, tool_name: str, tool_input: dict[str, Any]) -> RiskAssessment:
-        path = str(tool_input.get("path", ""))
-        for pattern in SENSITIVE_FILE_PATTERNS:
-            if pattern.search(path):
-                return RiskAssessment(
-                    AutoRiskLevel.HIGH,
-                    tool_name,
-                    "prompt",
-                    f"Modifying sensitive file: {path}",
-                )
-        return RiskAssessment(
-            AutoRiskLevel.MEDIUM, tool_name, "prompt", "File modification requires approval"
+            AutoRiskLevel.MEDIUM,
+            tool_name,
+            "prompt",
+            "Default mode: approval required",
         )
 
     # --- input / output layer helpers ---
@@ -267,9 +197,7 @@ class ModeState:
 
 _MODE_MESSAGES = {
     PermissionMode.DEFAULT: "Default mode: all actions require approval",
-    PermissionMode.AUTO: "Auto mode: safe operations auto-approved",
     PermissionMode.BYPASS: "BYPASS MODE: all permissions skipped (dangerous)",
-    PermissionMode.PLAN: "Plan mode: read-only operations only",
 }
 
 

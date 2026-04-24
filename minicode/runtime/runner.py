@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-import uuid
 from copy import deepcopy
 from typing import Any, Iterable
 
@@ -13,6 +12,7 @@ from langgraph.types import Command
 from minicode.core.messages import extract_text, extract_thinking_delta, make_human_message, marker_kind
 from minicode.core.types import GraphEvent, RunTurnResult, ToolContext
 from minicode.features.tools import ToolGraphAdapter
+from minicode.platform.config import normalize_mode
 
 from .graph_state import GraphState
 from .model_factory import create_chat_model
@@ -80,7 +80,7 @@ def run_turn(
     persist: bool = True,
 ) -> RunTurnResult:
     services.migrator.migrate_once()
-    resolved_mode = mode or services.settings.auto_mode
+    resolved_mode = normalize_mode(mode or services.settings.auto_mode)
     input_messages = list(messages or [])
     if prompt:
         input_messages.append(HumanMessage(content=prompt))
@@ -96,6 +96,11 @@ def run_turn(
     if permissions is not None and hasattr(permissions, "begin_turn"):
         permissions.begin_turn()
     auto = getattr(services, "auto", None)
+    if auto is not None and hasattr(auto, "set_mode"):
+        try:
+            auto.set_mode(resolved_mode, changed_by="runtime")
+        except ValueError:
+            auto.set_mode("default", changed_by="runtime")
     if auto is not None and prompt:
         detected, reason = auto.detect_prompt_injection(prompt)
         if detected:
@@ -534,7 +539,6 @@ def _build_graph(*, services: Any, chat_model: Any, event_sink) -> StateGraph:
         last_ai = next(
             (msg for msg in reversed(messages) if getattr(msg, "type", "") == "ai"), None
         )
-        print("MESSAGES:", messages)
         if last_ai is None:
             return {
                 "final_text": "Model did not return an assistant message.",
@@ -602,18 +606,6 @@ def _build_graph(*, services: Any, chat_model: Any, event_sink) -> StateGraph:
                 "route": "memory_update",
             }
 
-        def subtask_runner(sub_mode: str, sub_prompt: str, parent_thread_id: str) -> str:
-            result = run_turn(
-                services=services,
-                prompt=sub_prompt,
-                thread_id=f"{parent_thread_id}:{uuid.uuid4().hex[:6]}",
-                mode=sub_mode,
-                max_steps=max(8, state.get("max_steps", 40) // 2),
-                chat_model=chat_model,
-                persist=False,
-            )
-            return result.final_text or result.error or ""
-
         tool_calls = list(getattr(last_ai, "tool_calls", []) or [])
         for call in tool_calls:
             name = (
@@ -638,7 +630,7 @@ def _build_graph(*, services: Any, chat_model: Any, event_sink) -> StateGraph:
                 mode=state.get("mode", "default"),
                 services=services,
                 emit_event=thread_safe_emit,
-                subtask_runner=subtask_runner,
+                agent_name=getattr(services, "agent_name", "orchestrator"),
             ),
         )
 

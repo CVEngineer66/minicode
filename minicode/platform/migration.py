@@ -9,6 +9,7 @@ from pathlib import Path
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from minicode.core.types import SessionMeta
+from minicode.features.tasks.services import normalize_task_tracker_item
 from minicode.features.sessions.repository import checkpoint_from_messages
 
 
@@ -188,7 +189,12 @@ class Migrator:
                 continue
             if isinstance(data, list):
                 for item in data:
-                    title = str(item.get("title", "")).strip()
-                    if title:
-                        self.task_tracker.add_task(title=title, note=str(item.get("note", "")), workspace=str(Path.cwd().resolve()))
+                    normalized = normalize_task_tracker_item(item)
+                    if normalized is None:
+                        continue
+                    self.task_tracker.add_task(
+                        title=normalized["title"],
+                        note=normalized["note"],
+                        workspace=str(Path.cwd().resolve()),
+                    )
             self.db.write_ledger(f"tasks:{candidate}")

@@ -38,6 +38,30 @@ def _payload(details: list[str] | None = None, choices: list[dict] | None = None
     }
 
 
+def _choice_payload() -> dict:
+    return {
+        "prompt_kind": "choice",
+        "summary": "Pick an implementation strategy",
+        "details": [
+            "1. Minimal patch - smaller diff, keeps current structure",
+            "2. Refactor - cleaner model, larger surface area",
+        ],
+        "choices": [
+            {
+                "key": "1",
+                "label": "Minimal patch",
+                "payload": {"choice_id": "minimal", "choice_label": "Minimal patch"},
+            },
+            {
+                "key": "2",
+                "label": "Refactor",
+                "payload": {"choice_id": "refactor", "choice_label": "Refactor"},
+            },
+        ],
+        "cancel_payload": {"choice_cancelled": True},
+    }
+
+
 # ---- pure helpers ---------------------------------------------------
 
 
@@ -101,6 +125,23 @@ def test_approval_entry_deny_posts_deny_regardless_of_highlight() -> None:
         entry.action_deny()
     msg = mock_post.call_args[0][0]
     assert msg.decision == {"decision": "deny"}
+
+
+def test_choice_entry_confirm_posts_selected_payload() -> None:
+    entry = ApprovalEntry(_choice_payload())
+    entry.action_move_down()
+    with patch.object(entry, "post_message") as mock_post:
+        entry.action_confirm()
+    msg = mock_post.call_args[0][0]
+    assert msg.decision == {"choice_id": "refactor", "choice_label": "Refactor"}
+
+
+def test_choice_entry_deny_posts_cancel_payload() -> None:
+    entry = ApprovalEntry(_choice_payload())
+    with patch.object(entry, "post_message") as mock_post:
+        entry.action_deny()
+    msg = mock_post.call_args[0][0]
+    assert msg.decision == {"choice_cancelled": True}
 
 
 def test_approval_entry_toggle_expand_flips_state() -> None:
@@ -176,6 +217,13 @@ def test_approval_entry_dangerous_reason_rendered() -> None:
     assert "rm -rf" in rendered
 
 
+def test_choice_entry_renders_choice_header_and_cancel_hint() -> None:
+    entry = ApprovalEntry(_choice_payload())
+    rendered = _render_str(entry)
+    assert "User choice required" in rendered
+    assert "Esc cancel" in rendered
+
+
 # ---- app-level wiring ----------------------------------------------
 
 
@@ -224,6 +272,37 @@ def test_approval_decided_removes_entry_restores_input_resumes_turn(tmp_path) ->
             assert list(app.query(ApprovalEntry)) == []
             assert app.focused is app.query_one(Input)
             assert launch_calls == [{"resume": {"decision": "allow_turn"}}]
+
+    asyncio.run(run_test())
+
+
+def test_choice_decided_removes_entry_restores_input_resumes_turn(tmp_path) -> None:
+    async def run_test() -> None:
+        services = SimpleNamespace(
+            paths=SimpleNamespace(global_dir=tmp_path),
+            settings=SimpleNamespace(auto_mode="default", model="m"),
+        )
+        app = MiniCodeApp(services)
+        launch_calls: list[dict] = []
+
+        def fake_launch(**kwargs):
+            launch_calls.append(kwargs)
+
+        async with app.run_test() as pilot:
+            app._launch_turn = fake_launch  # type: ignore[assignment]
+            app._show_approval_inline(_choice_payload())
+            await pilot.pause()
+
+            entry = app._approval_entry
+            assert entry is not None
+            entry.action_move_down()
+            entry.action_confirm()
+            await pilot.pause()
+
+            assert app._approval_entry is None
+            assert list(app.query(ApprovalEntry)) == []
+            assert app.focused is app.query_one(Input)
+            assert launch_calls == [{"resume": {"choice_id": "refactor", "choice_label": "Refactor"}}]
 
     asyncio.run(run_test())
 

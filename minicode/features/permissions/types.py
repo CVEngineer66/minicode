@@ -8,6 +8,8 @@ PermissionDecision = Literal[
     "allow_always",
     "allow_turn",
     "allow_all_turn",
+    "allow_command_pattern",
+    "allow_directory_pattern",
     "deny_once",
     "deny_always",
     "deny_with_feedback",

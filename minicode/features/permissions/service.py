@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from minicode.core.types import PermissionPolicy, ToolCapability
@@ -18,7 +19,7 @@ class PolicyEngine:
 
     Integrates with PatternSet (persisted allow/deny globs) and dangerous
     command classification. Callers supply tool capability + policy (from the
-    ToolSpec) plus the current mode (`default` / `plan` / `bypass`).
+    ToolSpec) plus the current mode (`default` / `bypass`).
     """
 
     def __init__(self, patterns: PatternSet | None = None) -> None:
@@ -32,13 +33,14 @@ class PolicyEngine:
         capability: ToolCapability,
         policy: PermissionPolicy,
         mode: str,
+        cwd: str | None = None,
     ) -> ApprovalRequest | None:
         decision_key = self.decision_key(tool_name, arguments)
         if mode == "bypass":
             return None
 
         # Deny-first: hard deny patterns short-circuit to deny_once via broker.
-        if self._is_hard_denied(tool_name, arguments):
+        if self._is_hard_denied(tool_name, arguments, cwd=cwd):
             return ApprovalRequest(
                 kind=policy.kind,
                 summary=f"Denied by pattern: {tool_name}",
@@ -48,22 +50,13 @@ class PolicyEngine:
             )
 
         # Pre-approved by pattern allowlist
-        if self._is_pattern_allowed(tool_name, arguments):
+        if self._is_pattern_allowed(tool_name, arguments, cwd=cwd):
             return None
 
-        dangerous_reason = self._dangerous_reason(tool_name, arguments)
+        dangerous_reason = self._dangerous_reason(tool_name, arguments, cwd=cwd)
         details: list[str] = [f"Arguments: {arguments}"]
         if dangerous_reason:
             details.insert(0, dangerous_reason)
-
-        if mode == "plan" and (capability.shell or capability.writes_files or capability.network):
-            return ApprovalRequest(
-                kind=policy.kind,
-                summary=f"Plan mode requires approval for {tool_name}",
-                details=details,
-                scope=decision_key,
-                choices=self.default_choices(),
-            )
 
         requires = (
             policy.always_require_approval
@@ -79,43 +72,70 @@ class PolicyEngine:
                 summary=f"Approve {tool_name}",
                 details=details,
                 scope=decision_key,
-                choices=self.default_choices(),
+                choices=self.default_choices(arguments=arguments, cwd=cwd),
             )
         return None
 
-    def default_choices(self) -> list[dict[str, str]]:
-        return [
+    def default_choices(self, *, arguments: dict[str, Any], cwd: str | None = None) -> list[dict[str, Any]]:
+        choices: list[dict[str, Any]] = [
             {"key": "y", "label": "Allow once", "decision": "allow_once"},
             {"key": "t", "label": "Allow for this turn", "decision": "allow_turn"},
-            {"key": "a", "label": "Always allow", "decision": "allow_always"},
-            {"key": "n", "label": "Deny", "decision": "deny_once"},
         ]
+        command_pattern = self._command_pattern(arguments)
+        directory_pattern = self._directory_pattern(arguments, cwd=cwd)
+        if command_pattern:
+            command_name = command_pattern.split()[0]
+            choices.append(
+                {
+                    "key": "c",
+                    "label": f"Always allow {command_name} commands",
+                    "payload": {
+                        "decision": "allow_command_pattern",
+                        "pattern": command_pattern,
+                    },
+                }
+            )
+        if directory_pattern:
+            choices.append(
+                {
+                    "key": "d",
+                    "label": "Always allow this directory",
+                    "payload": {
+                        "decision": "allow_directory_pattern",
+                        "path": directory_pattern,
+                    },
+                }
+            )
+        if not command_pattern and not directory_pattern:
+            choices.append({"key": "a", "label": "Always allow this action", "decision": "allow_always"})
+        choices.append({"key": "n", "label": "Deny", "decision": "deny_once"})
+        return choices
 
     def decision_key(self, tool_name: str, arguments: dict[str, Any]) -> str:
         stable = "|".join(f"{k}={arguments[k]}" for k in sorted(arguments))
         return f"{tool_name}|{stable}"
 
     # --- pattern helpers ---
-    def _paths_in_args(self, arguments: dict[str, Any]) -> list[str]:
+    def _paths_in_args(self, arguments: dict[str, Any], cwd: str | None = None) -> list[str]:
         paths: list[str] = []
         for key in ("path", "filePath", "file_path", "target", "source", "destination"):
             value = arguments.get(key)
             if isinstance(value, str) and value:
-                paths.append(value)
+                paths.append(self._resolve_path(value, cwd))
         return paths
 
     def _command_in_args(self, arguments: dict[str, Any]) -> tuple[str | None, list[str]]:
         command = arguments.get("command")
         if isinstance(command, str) and command:
-            args = arguments.get("args") or []
-            if isinstance(args, list):
+            args = arguments.get("args")
+            if isinstance(args, list) and args:
                 return command, [str(a) for a in args]
             parts = command.split()
             return parts[0], parts[1:]
         return None, []
 
-    def _is_hard_denied(self, tool_name: str, arguments: dict[str, Any]) -> bool:
-        for p in self._paths_in_args(arguments):
+    def _is_hard_denied(self, tool_name: str, arguments: dict[str, Any], *, cwd: str | None = None) -> bool:
+        for p in self._paths_in_args(arguments, cwd=cwd):
             if match_any_path(p, self.patterns.denied_directories) or match_any_path(
                 p, self.patterns.denied_edits
             ):
@@ -125,8 +145,8 @@ class PolicyEngine:
             return True
         return False
 
-    def _is_pattern_allowed(self, tool_name: str, arguments: dict[str, Any]) -> bool:
-        paths = self._paths_in_args(arguments)
+    def _is_pattern_allowed(self, tool_name: str, arguments: dict[str, Any], *, cwd: str | None = None) -> bool:
+        paths = self._paths_in_args(arguments, cwd=cwd)
         if paths and all(
             match_any_path(p, self.patterns.allowed_directories)
             or match_any_path(p, self.patterns.allowed_edits)
@@ -138,11 +158,46 @@ class PolicyEngine:
             return True
         return False
 
-    def _dangerous_reason(self, tool_name: str, arguments: dict[str, Any]) -> str | None:
+    def _dangerous_reason(self, tool_name: str, arguments: dict[str, Any], *, cwd: str | None = None) -> str | None:
         command, args = self._command_in_args(arguments)
         if command:
             return classify_dangerous_command(command, args)
         return None
+
+    def _command_pattern(self, arguments: dict[str, Any]) -> str | None:
+        command, args = self._command_in_args(arguments)
+        if not command:
+            return None
+        return command if not args else f"{command} *"
+
+    def _directory_pattern(self, arguments: dict[str, Any], *, cwd: str | None = None) -> str | None:
+        paths = self._paths_in_args(arguments, cwd=cwd)
+        if not paths:
+            return None
+        return self._directory_for_path(paths[0])
+
+    def _resolve_path(self, path: str, cwd: str | None) -> str:
+        candidate = Path(path)
+        if not candidate.is_absolute() and cwd:
+            candidate = Path(cwd) / candidate
+        try:
+            return str(candidate.resolve())
+        except OSError:
+            return str(candidate)
+
+    def _directory_for_path(self, path: str) -> str:
+        candidate = Path(path)
+        try:
+            if candidate.exists() and candidate.is_file():
+                return str(candidate.parent.resolve())
+        except OSError:
+            pass
+        if candidate.suffix:
+            return str(candidate.parent.resolve())
+        try:
+            return str(candidate.resolve())
+        except OSError:
+            return str(candidate)
 
 
 class ApprovalBroker:
@@ -206,10 +261,14 @@ class ApprovalBroker:
 
     # --- pattern mutation ---
     def add_allowed_directory(self, path: str) -> None:
+        if not path:
+            return
         self.policy_engine.patterns.allowed_directories.add(path)
         self._persist_patterns()
 
     def add_allowed_command(self, pattern: str) -> None:
+        if not pattern:
+            return
         self.policy_engine.patterns.allowed_commands.add(pattern)
         self._persist_patterns()
 

@@ -84,7 +84,16 @@ class TaskGraphRepository:
                 "SELECT node_id, title, status, metadata_json FROM task_graph_nodes WHERE workspace = ? ORDER BY updated_at DESC",
                 (workspace,),
             ).fetchall()
-            edges = conn.execute("SELECT parent_id, child_id FROM task_graph_edges").fetchall()
+            edges = conn.execute(
+                """
+                SELECT e.parent_id, e.child_id
+                FROM task_graph_edges e
+                JOIN task_graph_nodes parent ON parent.node_id = e.parent_id
+                JOIN task_graph_nodes child ON child.node_id = e.child_id
+                WHERE parent.workspace = ? AND child.workspace = ?
+                """,
+                (workspace, workspace),
+            ).fetchall()
         return {
             "nodes": [
                 {"node_id": row[0], "title": row[1], "status": row[2], "metadata_json": row[3]}
@@ -126,6 +135,25 @@ class BackgroundTaskRepository:
                     record.output_path,
                 ),
             )
+
+    def get(self, task_id: str) -> dict[str, Any] | None:
+        with self.db.connection() as conn:
+            row = conn.execute(
+                "SELECT task_id, command, cwd, status, created_at, updated_at, return_code, output_path FROM background_tasks WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "task_id": row[0],
+            "command": row[1],
+            "cwd": row[2],
+            "status": row[3],
+            "created_at": row[4],
+            "updated_at": row[5],
+            "return_code": row[6],
+            "output_path": row[7],
+        }
 
     def list(self) -> list[dict[str, Any]]:
         with self.db.connection() as conn:

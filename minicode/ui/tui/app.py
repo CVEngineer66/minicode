@@ -701,7 +701,9 @@ class MiniCodeApp(App):
         self.thread_id = getattr(result, "thread_id", self.thread_id)
         interrupt = getattr(result, "interrupt", None)
         if interrupt:
-            self._add_turn_timing_entry("Awaiting approval", preposition="after")
+            prompt_kind = str(interrupt.get("prompt_kind") or "approval")
+            label = "Awaiting user choice" if prompt_kind == "choice" else "Awaiting approval"
+            self._add_turn_timing_entry(label, preposition="after")
             self._release_turn_state()
             self._busy = False
             self._show_approval_inline(interrupt)

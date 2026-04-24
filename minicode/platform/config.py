@@ -108,6 +108,15 @@ def _pick_active(
     return catalog.resolve(default_id)
 
 
+def normalize_mode(value: Any) -> str:
+    normalized = str(value or "default").strip().lower() or "default"
+    if normalized in {"auto", "plan"}:
+        return "default"
+    if normalized not in {"default", "bypass"}:
+        return "default"
+    return normalized
+
+
 def load_settings(paths: AppPaths, cwd: str | Path) -> Settings:
     config_data = _load_config_data(paths.config_path)
 
@@ -115,7 +124,7 @@ def load_settings(paths: AppPaths, cwd: str | Path) -> Settings:
     current_model = config_data.get("current_model")
     active = _pick_active(catalog, current_model if isinstance(current_model, str) else None)
 
-    auto_mode = str(config_data.get("default_mode", "default"))
+    auto_mode = normalize_mode(config_data.get("default_mode", "default"))
     system_prompt = str(
         config_data.get(
             "system_prompt",

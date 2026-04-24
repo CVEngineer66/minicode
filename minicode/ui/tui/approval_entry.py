@@ -1,10 +1,10 @@
-"""Inline approval card widget.
+"""Inline interrupt card widget.
 
 Replaces the old full-screen ``ApprovalScreen``. Sits in the transcript
 as a focusable widget that owns its own arrow-key / Enter / Ctrl+O
 bindings. Emits ``ApprovalDecided`` message when the user picks a
 choice; the app then removes the card, restores Input focus, and
-resumes the turn with ``{"decision": <str>}``.
+resumes the turn with the selected payload.
 """
 
 from __future__ import annotations
@@ -41,19 +41,19 @@ _BODY_PREVIEW_LINES = 5
 class _Choice:
     key: str
     label: str
-    decision: str
+    payload: dict[str, Any]
 
 
 class ApprovalEntry(Static):
-    """Focusable transcript card that collects an approval decision."""
+    """Focusable transcript card that collects an interrupt decision."""
 
     can_focus = True
 
     BINDINGS = [
-        Binding("up",     "move_up",       show=False, priority=True),
-        Binding("down",   "move_down",     show=False, priority=True),
-        Binding("enter",  "confirm",       show=False, priority=True),
-        Binding("escape", "deny",          show=False, priority=True),
+        Binding("up", "move_up", show=False, priority=True),
+        Binding("down", "move_down", show=False, priority=True),
+        Binding("enter", "confirm", show=False, priority=True),
+        Binding("escape", "deny", show=False, priority=True),
         Binding("ctrl+o", "toggle_expand", show=False, priority=True),
     ]
 
@@ -64,16 +64,21 @@ class ApprovalEntry(Static):
 
     def __init__(self, payload: dict[str, Any], **kwargs: Any) -> None:
         super().__init__("", markup=False, **kwargs)
+        self._prompt_kind = str(payload.get("prompt_kind") or "approval")
         self._summary = str(payload.get("summary", "Approval required"))
         self._details = [str(d) for d in payload.get("details", [])]
         self._choices = [
             _Choice(
                 key=str(c.get("key", "")),
                 label=str(c.get("label", "")),
-                decision=str(c.get("decision", "allow_once")),
+                payload=dict(c.get("payload") or {"decision": str(c.get("decision", "allow_once"))}),
             )
             for c in payload.get("choices", [])
         ]
+        self._cancel_payload = dict(
+            payload.get("cancel_payload")
+            or ({"decision": "deny"} if self._prompt_kind == "approval" else {"choice_cancelled": True})
+        )
         self._highlight = 0
         self._expanded = False
         self.add_class("entry-approval")
@@ -99,10 +104,10 @@ class ApprovalEntry(Static):
         if not self._choices:
             return
         choice = self._choices[self._highlight]
-        self.post_message(self.ApprovalDecided({"decision": choice.decision}))
+        self.post_message(self.ApprovalDecided(dict(choice.payload)))
 
     def action_deny(self) -> None:
-        self.post_message(self.ApprovalDecided({"decision": "deny"}))
+        self.post_message(self.ApprovalDecided(dict(self._cancel_payload)))
 
     def action_toggle_expand(self) -> None:
         self._expanded = not self._expanded
@@ -111,14 +116,16 @@ class ApprovalEntry(Static):
     # ---- rendering --------------------------------------------------
 
     def _build_renderable(self) -> Any:
-        header = Text.from_markup(
-            f"[bold red]! Approval required[/]\n[bold]{escape(self._summary)}[/]"
-        )
+        if self._prompt_kind == "choice":
+            header_prefix = "[bold cyan]? User choice required[/]"
+            hint_text = "[dim](up/down select - Enter confirm - Esc cancel - Ctrl+O expand)[/]"
+        else:
+            header_prefix = "[bold red]! Approval required[/]"
+            hint_text = "[dim](up/down select - Enter confirm - Esc deny - Ctrl+O expand)[/]"
+        header = Text.from_markup(f"{header_prefix}\n[bold]{escape(self._summary)}[/]")
         body = self._render_details()
         choices = self._render_choices()
-        hint = Text.from_markup(
-            "[dim](up/down select · Enter confirm · Esc deny · Ctrl+O expand)[/]"
-        )
+        hint = Text.from_markup(hint_text)
         return Group(header, body, choices, hint)
 
     def _render_details(self) -> Text:
@@ -135,9 +142,7 @@ class ApprovalEntry(Static):
 
         short_fields, body_fields = _split_args(args_dict)
         for k, v in short_fields.items():
-            lines.append_text(
-                Text.from_markup(f"  [dim]{escape(k)}:[/] {escape(str(v))}\n")
-            )
+            lines.append_text(Text.from_markup(f"  [dim]{escape(k)}:[/] {escape(str(v))}\n"))
         for k, v in body_fields.items():
             lines.append_text(self._render_body_field(k, v))
         return lines
@@ -152,11 +157,8 @@ class ApprovalEntry(Static):
         else:
             preview = "\n".join(body_lines[:_BODY_PREVIEW_LINES])
             remaining = count - _BODY_PREVIEW_LINES
-            tail = f"\n  [dim]... ({remaining} more lines · ctrl+o to expand)[/]"
-        return Text.from_markup(
-            f"  [cyan]{escape(key)}:[/]\n"
-            f"  [dim]{escape(preview)}[/]{tail}\n"
-        )
+            tail = f"\n  [dim]... ({remaining} more lines - ctrl+o to expand)[/]"
+        return Text.from_markup(f"  [cyan]{escape(key)}:[/]\n" f"  [dim]{escape(preview)}[/]{tail}\n")
 
     def _render_choices(self) -> Text:
         if not self._choices:

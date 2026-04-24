@@ -39,11 +39,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote
 
+from langgraph.types import interrupt
+
 from minicode.core.types import PermissionPolicy, ToolCapability, ToolResult, ToolSpec
+from minicode.features.tasks.services import normalize_task_tracker_item
 from minicode.platform.http import http_request as _http_request_impl, simple_web_search
 from minicode.platform.process import run_command_sync
 
 from .decorator import ToolRegistrar, _passthrough_validator
+from .metadata import enrich_input_schema, enrich_tool_description
 from .registry import ToolRegistry
 from .types import ToolContext
 
@@ -66,6 +70,111 @@ def _resolve_path(context: ToolContext, raw_path: str) -> Path:
 
 def _json_dump(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def _normalize_choice_options(options: list[Any]) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for index, raw in enumerate(options):
+        option_id = f"option_{index + 1}"
+        label = ""
+        description = ""
+        if isinstance(raw, dict):
+            option_id = str(
+                raw.get("id")
+                or raw.get("value")
+                or raw.get("key")
+                or option_id
+            ).strip() or option_id
+            label = str(
+                raw.get("label")
+                or raw.get("title")
+                or raw.get("name")
+                or option_id
+            ).strip()
+            description = str(
+                raw.get("description")
+                or raw.get("detail")
+                or raw.get("details")
+                or raw.get("tradeoff")
+                or ""
+            ).strip()
+        else:
+            label = str(raw).strip()
+        if not label:
+            label = option_id
+        normalized.append(
+            {
+                "id": option_id,
+                "label": label,
+                "description": description,
+            }
+        )
+    return normalized
+
+
+def _normalize_write_scope(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, list):
+        items = []
+        for item in value:
+            text = str(item).strip()
+            if text:
+                items.append(text)
+        return items
+    return []
+
+
+def _build_worker_interrupt_payload(worker: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    interrupt_payload = dict(payload or {})
+    details = [str(line) for line in interrupt_payload.get("details", [])]
+    details.insert(0, f"Subagent: {worker.agent_name} [{worker.task_type}]")
+    interrupt_payload["details"] = details
+    interrupt_payload["summary"] = interrupt_payload.get("summary") or worker.title
+    interrupt_payload["worker_id"] = worker.worker_id
+    interrupt_payload["worker_thread_id"] = worker.thread_id
+    choices = []
+    for choice in list(interrupt_payload.get("choices", [])):
+        updated = dict(choice or {})
+        choice_payload = dict(
+            updated.get("payload")
+            or (
+                {"decision": str(updated.get("decision"))}
+                if updated.get("decision") is not None
+                else {}
+            )
+        )
+        choice_payload.setdefault("worker_id", worker.worker_id)
+        updated["payload"] = choice_payload
+        choices.append(updated)
+    if choices:
+        interrupt_payload["choices"] = choices
+    cancel_payload = dict(interrupt_payload.get("cancel_payload") or {})
+    cancel_payload.setdefault("worker_id", worker.worker_id)
+    if not cancel_payload:
+        cancel_payload = {"worker_id": worker.worker_id}
+    interrupt_payload["cancel_payload"] = cancel_payload
+    return interrupt_payload
+
+
+def _run_worker_until_complete(worker_id: str, *, context: ToolContext) -> Any:
+    collaboration = context.services.collaboration
+    resume: dict[str, Any] | None = None
+    while True:
+        result = collaboration.start_worker(
+            services=context.services,
+            worker_id=worker_id,
+            mode=context.mode,
+            resume=resume,
+        )
+        interrupt_payload = getattr(result, "interrupt", None)
+        if not interrupt_payload:
+            return result
+        worker = collaboration.get_worker(worker_id)
+        decision = interrupt(_build_worker_interrupt_payload(worker, interrupt_payload))
+        resume = dict(decision or {})
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +204,75 @@ tools = ToolRegistrar()
 def ask_user(question: str) -> ToolResult:
     """Ask the user a direct follow-up question and end the current turn."""
     return ToolResult(content=question, await_user=True, metadata={"await_user": True})
+
+
+@tools.register(
+    capability=ToolCapability(concurrency_safe=False, interactive=True),
+    permission_policy=PermissionPolicy(kind="ask_user_choice"),
+)
+def ask_user_choice(question: str, options: list) -> ToolResult:
+    """Present bounded options to the user and resume the same turn with their selection."""
+    normalized = _normalize_choice_options(list(options or []))
+    if not question.strip():
+        return ToolResult(ok=False, content="Question cannot be empty.", error="empty_question")
+    if len(normalized) < 2:
+        return ToolResult(
+            ok=False,
+            content="ask_user_choice requires at least two options.",
+            error="insufficient_options",
+        )
+    details: list[str] = []
+    choices: list[dict[str, Any]] = []
+    for index, option in enumerate(normalized, start=1):
+        line = f"{index}. {option['label']}"
+        if option["description"]:
+            line += f" - {option['description']}"
+        details.append(line)
+        choices.append(
+            {
+                "key": str(index),
+                "label": option["label"],
+                "payload": {
+                    "choice_id": option["id"],
+                    "choice_label": option["label"],
+                },
+            }
+        )
+    selection = interrupt(
+        {
+            "prompt_kind": "choice",
+            "summary": question,
+            "details": details,
+            "choices": choices,
+            "cancel_payload": {"choice_cancelled": True},
+        }
+    )
+    if not isinstance(selection, dict):
+        return ToolResult(
+            ok=False,
+            content="User selection payload was invalid.",
+            error="invalid_choice_payload",
+        )
+    if selection.get("choice_cancelled"):
+        return ToolResult(
+            ok=False,
+            content="User cancelled option selection.",
+            error="choice_cancelled",
+        )
+    selected_id = str(selection.get("choice_id", "")).strip()
+    selected = next((item for item in normalized if item["id"] == selected_id), None)
+    if selected is None:
+        return ToolResult(
+            ok=False,
+            content="User selection did not match any offered option.",
+            error="unknown_choice",
+        )
+    payload = {"selected": selected}
+    return ToolResult(
+        content=_json_dump(payload),
+        structured=payload,
+        metadata=payload,
+    )
 
 
 # --- filesystem read -------------------------------------------------------
@@ -318,6 +496,48 @@ def run_command(
     code, stdout, stderr = run_command_sync(command, context.cwd, timeout)
     payload = {"return_code": code, "stdout": stdout, "stderr": stderr}
     return ToolResult(ok=code == 0, content=_json_dump(payload), error=None if code == 0 else stderr[:500])
+
+
+@tools.register()
+def background_tasks_list(limit: int = 20, *, context: ToolContext) -> ToolResult:
+    """List tracked background shell tasks after refreshing their latest status."""
+    records = context.services.background_tasks.refresh()
+    payload = {
+        "tasks": list(records[: max(1, int(limit or 20))]),
+        "total": len(records),
+        "slots": context.services.background_tasks.slot_stats(),
+    }
+    return ToolResult(content=_json_dump(payload), structured=payload, metadata=payload)
+
+
+@tools.register()
+def background_task_status(task_id: str, *, context: ToolContext) -> ToolResult:
+    """Return the latest metadata for one background shell task by id."""
+    record = context.services.background_tasks.get(task_id, refresh=True)
+    if record is None:
+        return ToolResult(
+            ok=False,
+            content=f"Background task `{task_id}` was not found.",
+            error="background_task_not_found",
+        )
+    return ToolResult(content=_json_dump(record), structured=record, metadata=record)
+
+
+@tools.register()
+def background_task_output(task_id: str, *, context: ToolContext) -> ToolResult:
+    """Read the latest captured output for one background shell task by id."""
+    record = context.services.background_tasks.get(task_id, refresh=True)
+    if record is None:
+        return ToolResult(
+            ok=False,
+            content=f"Background task `{task_id}` was not found.",
+            error="background_task_not_found",
+        )
+    payload = {
+        "task": record,
+        "output": context.services.background_tasks.read_output(task_id),
+    }
+    return ToolResult(content=_json_dump(payload), structured=payload, metadata=payload)
 
 
 @tools.register(
@@ -603,23 +823,125 @@ def todo_write(items: list, *, context: ToolContext) -> ToolResult:
     workspace = context.services.settings.workspace
     saved = []
     for item in items:
-        title = str(item.get("title", "")).strip()
-        if title:
-            context.services.task_tracker.add_task(title=title, note=str(item.get("note", "")), workspace=workspace)
-            saved.append(title)
+        normalized = normalize_task_tracker_item(item)
+        if normalized is None:
+            continue
+        context.services.task_tracker.add_task(
+            title=normalized["title"],
+            note=normalized["note"],
+            workspace=workspace,
+        )
+        saved.append(normalized["title"])
     return ToolResult(content=_json_dump({"saved": saved}))
 
 
 @tools.register(
-    capability=ToolCapability(task=True, concurrency_safe=False),
-    permission_policy=_always("task"),
+    capability=ToolCapability(concurrency_safe=False),
+    permission_policy=PermissionPolicy(kind="task"),
 )
-def task(prompt: str, mode: str = "general", *, context: ToolContext) -> ToolResult:
-    """Run a subtask with an internal subgraph."""
-    if context.subtask_runner is None:
-        return ToolResult(ok=False, content="Subtask runner is not configured.", error="Missing subtask runner")
-    summary = context.subtask_runner(mode, prompt, context.thread_id)
-    return ToolResult(content=summary)
+def task(
+    prompt: str,
+    mode: str = "general",
+    execution_mode: str = "foreground",
+    write_scope: list | None = None,
+    depends_on: list | None = None,
+    *,
+    context: ToolContext,
+) -> ToolResult:
+    """Submit a single subagent task to the task graph scheduler."""
+    submitted = context.services.collaboration.submit_task(
+        services=context.services,
+        prompt=prompt,
+        parent_thread_id=context.thread_id,
+        current_mode=context.mode,
+        mode_hint=mode,
+        execution_mode=execution_mode,
+        write_scope=_normalize_write_scope(write_scope),
+        depends_on=[str(item) for item in list(depends_on or []) if str(item).strip()],
+    )
+    payload = {"submitted": submitted}
+    return ToolResult(content=_json_dump(payload), structured=payload, metadata=payload)
+
+
+@tools.register(
+    capability=ToolCapability(concurrency_safe=False),
+    permission_policy=PermissionPolicy(kind="plan_tasks"),
+)
+def plan_tasks(items: list, edges: list | None = None, *, context: ToolContext) -> ToolResult:
+    """Submit multiple planned tasks and dependencies to the task graph."""
+    normalized_items: list[dict[str, Any]] = []
+    for item in list(items or []):
+        if not isinstance(item, dict):
+            continue
+        payload = dict(item)
+        payload["write_scope"] = _normalize_write_scope(
+            payload.get("write_scope") or payload.get("paths")
+        )
+        normalized_items.append(payload)
+    planned = context.services.collaboration.submit_plan(
+        services=context.services,
+        items=normalized_items,
+        edges=[dict(item) for item in list(edges or []) if isinstance(item, dict)],
+        parent_thread_id=context.thread_id,
+        current_mode=context.mode,
+    )
+    return ToolResult(content=_json_dump(planned), structured=planned, metadata=planned)
+
+
+@tools.register(
+    capability=ToolCapability(concurrency_safe=False, long_running=True),
+    permission_policy=PermissionPolicy(kind="run_ready_tasks"),
+)
+def run_ready_tasks(limit: int = 1, allow_parallel: bool = False, *, context: ToolContext) -> ToolResult:
+    """Execute ready scheduled tasks in foreground serial order."""
+    collaboration = context.services.collaboration
+    ready_workers = collaboration.ready_workers(context.services)
+    if not ready_workers:
+        payload = {"executed": [], "ready_count": 0, "parallel_eligible": []}
+        return ToolResult(content=_json_dump(payload), structured=payload, metadata=payload)
+    executed: list[dict[str, Any]] = []
+    parallel_eligible: list[str] = []
+    selected = ready_workers[: max(1, int(limit or 1))]
+    running_snapshot: list[Any] = []
+    for worker in ready_workers:
+        if collaboration.can_run_in_parallel(worker, running_snapshot):
+            parallel_eligible.append(worker.worker_id)
+            running_snapshot.append(worker)
+    for worker in selected:
+        if worker.execution_mode == "background":
+            context.services.collaboration.queue_worker(
+                services=context.services,
+                worker_id=worker.worker_id,
+            )
+            executed.append(
+                {
+                    "worker_id": worker.worker_id,
+                    "node_id": worker.node_id,
+                    "status": worker.status,
+                    "execution_mode": worker.execution_mode,
+                    "skipped": "background_execution_not_implemented",
+                }
+            )
+            continue
+        result = _run_worker_until_complete(worker.worker_id, context=context)
+        worker_state = collaboration.get_worker(worker.worker_id)
+        executed.append(
+            {
+                "worker_id": worker.worker_id,
+                "node_id": worker.node_id,
+                "agent_name": worker.agent_name,
+                "task_type": worker.task_type,
+                "status": worker_state.status,
+                "summary": worker_state.summary or getattr(result, "final_text", None),
+                "error": worker_state.error or getattr(result, "error", None),
+            }
+        )
+    payload = {
+        "executed": executed,
+        "ready_count": len(ready_workers),
+        "parallel_eligible": parallel_eligible if allow_parallel else [],
+    }
+    return ToolResult(content=_json_dump(payload), structured=payload, metadata=payload)
 
 
 @tools.register(
@@ -743,12 +1065,23 @@ def _make_mcp_tool(server_name: str, tool_name: str, description: str, schema: d
                 text_parts.append(str(item.get("text", "")))
         return ToolResult(content="\n".join(text_parts) or _json_dump(result))
 
+    resolved_name = f"mcp.{server_name}.{tool_name}"
+    capability = ToolCapability(network=True, concurrency_safe=False)
+    policy = _always("mcp")
     return ToolSpec(
-        name=f"mcp.{server_name}.{tool_name}",
-        description=description or f"MCP tool {tool_name} from {server_name}",
-        input_schema=schema or {"type": "object", "properties": {}},
-        capability=ToolCapability(network=True, concurrency_safe=False),
-        permission_policy=_always("mcp"),
+        name=resolved_name,
+        description=enrich_tool_description(
+            name=resolved_name,
+            base_description=description or f"MCP tool {tool_name} from {server_name}.",
+            capability=capability,
+            permission_policy=policy,
+        ),
+        input_schema=enrich_input_schema(
+            resolved_name,
+            schema or {"type": "object", "properties": {}},
+        ),
+        capability=capability,
+        permission_policy=policy,
         validator=_passthrough_validator,
         executor=_executor,
     )

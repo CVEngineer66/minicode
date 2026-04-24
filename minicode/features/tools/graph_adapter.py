@@ -4,6 +4,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
+from langgraph.errors import GraphInterrupt
+
 from minicode.core.messages import make_tool_message
 from minicode.core.types import ToolContext, ToolResult
 from minicode.features.permissions.graph_adapter import ensure_tool_allowed
@@ -30,23 +32,13 @@ def _extract_path(args: dict[str, Any]) -> str | None:
 
 
 class ToolGraphAdapter:
-    """Executes LangGraph tool calls with concurrency, permission, and execution-boundary gates.
-
-    Boundaries (before running any tool):
-    1. Schema validation (spec.validator)
-    2. ExecutionService path/command boundary (DENY short-circuits; REQUIRE_APPROVAL
-       feeds into PolicyEngine-driven approval)
-    3. AutoModeService tool classification (action: approve/prompt/block)
-    4. PolicyEngine approval flow (including dangerous command escalation)
-    """
+    """Executes LangGraph tool calls with concurrency, permission, and boundary gates."""
 
     def __init__(self, registry: object, permissions: object) -> None:
         self.registry = registry
         self.permissions = permissions
 
     def _should_run_serially(self, tool_calls: list[dict[str, Any]], mode: str) -> bool:
-        if mode == "plan":
-            return True
         for call in tool_calls:
             spec = self.registry.get(str(call.get("name", "")))
             if spec.capability.requires_serial_execution:
@@ -140,14 +132,14 @@ class ToolGraphAdapter:
 
         # AutoMode classifier (only in auto/plan modes — default/bypass rely on PolicyEngine).
         auto = getattr(context.services, "auto", None)
-        if auto is not None and context.mode in {"auto", "plan"}:
+        if auto is not None:
             assessment = auto.assess(name, validated)
             auto.record(assessment.action)
             if assessment.action == "block":
                 return ToolResult(
                     ok=False,
-                    content=f"Blocked by auto mode: {assessment.reason}",
-                    error="auto_blocked",
+                    content=f"Blocked by mode policy: {assessment.reason}",
+                    error="mode_blocked",
                 )
 
         # PolicyEngine approval gate (patterns / risk / capability).
@@ -158,6 +150,7 @@ class ToolGraphAdapter:
             capability=spec.capability,
             policy=spec.permission_policy,
             mode=context.mode,
+            cwd=context.cwd,
         )
         if request is not None:
             decision = ensure_tool_allowed(self.permissions, request, decision_key)
@@ -178,6 +171,8 @@ class ToolGraphAdapter:
         )
         try:
             result = spec.executor(validated, context)
+        except GraphInterrupt:
+            raise
         except BaseException as exc:
             context.emit_event(
                 "tool_result",

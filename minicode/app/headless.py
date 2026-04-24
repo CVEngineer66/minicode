@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 
-from ..features.sessions import format_session_time
+from ..features.sessions import format_session_preview, format_session_time
 from ..runtime.runner import run_turn
 from .bootstrap import bootstrap_services
 
@@ -17,7 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--decision-json")
     parser.add_argument(
         "--mode",
-        choices=["default", "auto", "bypass", "plan"],
+        choices=["default", "bypass"],
         default=None,
     )
     parser.add_argument(
@@ -58,7 +58,10 @@ def main(argv: list[str] | None = None) -> int:
             print("No saved sessions found.")
             return 0
         for session in sessions:
-            print(f"{session.thread_id}\t{format_session_time(session.updated_at)}\t{session.title}")
+            print(
+                f"{session.thread_id}\t{format_session_time(session.updated_at)}"
+                f"\t{format_session_preview(session.title)}"
+            )
         return 0
 
     resume = json.loads(args.decision_json) if args.decision_json else None

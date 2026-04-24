@@ -150,7 +150,7 @@ class SlashDispatcher:
     def _mode(self, rest: str) -> DispatchResult:
         auto = getattr(self.services, "auto", None)
         if auto is None:
-            return DispatchResult(handled=True, output="Auto mode service unavailable.")
+            return DispatchResult(handled=True, output="Mode service unavailable.")
         target = rest.strip()
         if not target:
             return DispatchResult(
@@ -245,15 +245,9 @@ class SlashDispatcher:
 
     def _agents(self, _rest: str) -> DispatchResult:
         collab = getattr(self.services, "collaboration", None)
-        if collab is None or not hasattr(collab, "list_agents"):
+        if collab is None or not hasattr(collab, "format_status"):
             return DispatchResult(handled=True, output="Collaboration service unavailable.")
-        agents = collab.list_agents()
-        if not agents:
-            return DispatchResult(handled=True, output="No registered agents.")
-        lines = [
-            f"{agent.get('name', '?')}: {agent.get('description', '')}" for agent in agents
-        ]
-        return DispatchResult(handled=True, output="\n".join(lines))
+        return DispatchResult(handled=True, output=collab.format_status())
 
     def _skills(self, _rest: str) -> DispatchResult:
         skills = getattr(self.services, "skills", None)

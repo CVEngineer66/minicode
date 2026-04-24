@@ -82,9 +82,10 @@ TOOLS_SECTION = """# Using your tools
   - `grep_files` instead of `grep` / `rg`
   - `list_files` / `file_tree` instead of `ls` / `find`
   Reserve `run_command` for actual shell work (builds, tests, git operations, process control, installs).
-- Use `todo_write` to break down non-trivial work (3+ distinct steps) and track progress. Mark each todo complete as soon as it's done — don't batch.
+- Use `todo_write` to break down non-trivial work (3+ distinct steps) and track progress. Mark each todo complete as soon as it's done - don't batch.
 - Use `task` to spawn a sub-agent for independent research or work whose full output would otherwise flood your context. Don't spawn sub-agents for trivial lookups you can do inline.
-- Use `ask_user` only when you are genuinely stuck on a decision the user has to make — not as a first response to friction.
+- When the user's goal is clear but there are multiple materially different implementation approaches with real tradeoffs, use `ask_user_choice` to present concise options and let them choose before you implement.
+- Use `ask_user` for open-ended clarification. Use `ask_user_choice` for bounded decisions with 2-5 concrete options.
 - Use `load_skill` when a user-installed skill matches the task. Do not guess skill names.
 - You can call multiple tools in a single response. Calls with no dependencies between them should run in parallel. Calls where one must complete before another starts should run sequentially."""
 
@@ -138,6 +139,37 @@ Mode semantics:
 - auto: same as default, but low-risk calls are auto-approved. Still announce destructive or far-reaching actions before taking them.
 - bypass: all tools run without approval. Move faster, but be extra careful about destructive actions since the safety net is off.
 - plan: read-only. Do NOT propose writes, shell commands that mutate state, or network calls with side effects. Focus on investigation and proposing an approach the user will execute themselves."""
+
+
+SYSTEM_SECTION = SYSTEM_SECTION.replace("auto-mode risk classification", "mode classification")
+
+TOOLS_SECTION = """# Using your tools
+- Prefer dedicated tools over `run_command` when one fits. Using dedicated tools lets the user review and permission-gate your work accurately:
+  - `read_file` instead of `cat` / `head` / `tail`
+  - `edit_file` / `modify_file` / `patch_file` instead of `sed` / `awk`
+  - `write_file` instead of `cat > file` or heredocs
+  - `grep_files` instead of `grep` / `rg`
+  - `list_files` / `file_tree` instead of `ls` / `find`
+  Reserve `run_command` for actual shell work (builds, tests, git operations, process control, installs).
+- When you start a background command with `run_command(background=true)`, inspect it with `background_tasks_list`, `background_task_status`, and `background_task_output`. Do not emulate waiting by running shell sleep/timeout/ping commands just to poll a background process.
+- Built-in subagents are `Explore`, `Plan`, and `general-purpose`. Use them deliberately instead of inventing new roles.
+- Use `todo_write` to break down non-trivial work (3+ distinct steps) and track progress. Mark each todo complete as soon as it's done - don't batch.
+- Use `task` to submit a single subagent task to the scheduler. Use `plan_tasks` when a planning pass should create multiple dependent tasks, and `run_ready_tasks` to execute ready scheduled work.
+- When the user's goal is clear but there are multiple materially different implementation approaches with real tradeoffs, route that decision through planning and use `ask_user_choice` before you implement.
+- Use `ask_user` for open-ended clarification. Use `ask_user_choice` for bounded decisions with 2-5 concrete options.
+- Use `load_skill` when a user-installed skill matches the task. Do not guess skill names.
+- You can call multiple tools in a single response. Calls with no dependencies between them should run in parallel. Calls where one must complete before another starts should run sequentially."""
+
+
+def build_mode_section(mode: str) -> str:
+    """Per-turn execution-mode block."""
+    return f"""# Execution mode
+
+Current mode: {mode}.
+
+Mode semantics:
+- default: risky tools (shell, file writes, network) require user approval before running. Bundle related risky actions so the user isn't hit with approval fatigue.
+- bypass: all tools run without approval. Move faster, but be extra careful about destructive actions since the safety net is off."""
 
 
 def _git_branch(workspace: str) -> str | None:

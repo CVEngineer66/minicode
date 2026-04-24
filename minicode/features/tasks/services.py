@@ -18,6 +18,32 @@ from .types import (
 )
 
 
+def normalize_task_tracker_item(item: Any) -> dict[str, str] | None:
+    """Normalize a task tracker item from either a string or mapping payload."""
+    if isinstance(item, str):
+        title = item.strip()
+        note = ""
+    elif isinstance(item, dict):
+        title = str(
+            item.get("title")
+            or item.get("task")
+            or item.get("text")
+            or item.get("content")
+            or ""
+        ).strip()
+        note = str(
+            item.get("note")
+            or item.get("description")
+            or item.get("details")
+            or ""
+        ).strip()
+    else:
+        return None
+    if not title:
+        return None
+    return {"title": title, "note": note}
+
+
 # ---------------------------------------------------------------------------
 # TaskTrackerService — flat workspace-scoped TODO list
 # ---------------------------------------------------------------------------
@@ -98,6 +124,20 @@ class TaskGraphService:
 
     def get_graph(self, workspace: str) -> dict[str, Any]:
         return self.repository.list_graph(workspace)
+
+    def update_metadata(self, workspace: str, node_id: str, updates: dict[str, Any]) -> None:
+        node = self._find_node(workspace, node_id)
+        if node is None:
+            raise TaskGraphError(f"node not found: {node_id}")
+        metadata = self._metadata_from_row(node)
+        metadata.update(dict(updates or {}))
+        self.repository.upsert_node(
+            node_id,
+            workspace,
+            node["title"],
+            node["status"],
+            metadata,
+        )
 
     # --- state transitions ---
     _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
@@ -346,9 +386,14 @@ class BackgroundTaskService:
             self._processes.pop(task_id, None)
         return self.repository.list()
 
+    def get(self, task_id: str, *, refresh: bool = True) -> dict[str, Any] | None:
+        if refresh:
+            self.refresh()
+        return self.repository.get(task_id)
+
     # --- output ---
     def read_output(self, task_id: str) -> str:
-        record = next((r for r in self.repository.list() if r["task_id"] == task_id), None)
+        record = self.repository.get(task_id)
         if not record or not record.get("output_path"):
             return ""
         path = Path(record["output_path"])

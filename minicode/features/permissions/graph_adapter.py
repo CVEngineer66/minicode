@@ -3,7 +3,7 @@ from __future__ import annotations
 from langgraph.types import interrupt
 
 
-def ensure_tool_allowed(permissions: object, request: object, decision_key: str) -> dict[str, str]:
+def ensure_tool_allowed(permissions: object, request: object, decision_key: str) -> dict[str, object]:
     """Pull a cached permission decision or surface an interrupt to the user.
 
     Recognized cached decisions:
@@ -28,6 +28,10 @@ def ensure_tool_allowed(permissions: object, request: object, decision_key: str)
     choice = normalized.get("decision")
     if choice in {"allow_always", "deny_always", "allow_turn", "allow_all_turn"}:
         permissions.store_decision(decision_key, choice, {"scope": request.scope})
+    elif choice == "allow_command_pattern":
+        permissions.add_allowed_command(str(normalized.get("pattern", "")).strip())
+    elif choice == "allow_directory_pattern":
+        permissions.add_allowed_directory(str(normalized.get("path", "")).strip())
     elif choice == "deny":
         # Normalize to a single one-shot deny
         normalized["decision"] = "deny_once"

@@ -110,7 +110,7 @@ class ToolContext:
     mode: str
     services: "AppServices"
     emit_event: Callable[[str, dict[str, Any]], None]
-    subtask_runner: Callable[[str, str, str], str] | None = None
+    agent_name: str = "orchestrator"
 
 
 @dataclass(slots=True)
@@ -144,6 +144,36 @@ class AgentCard:
 
 
 @dataclass(slots=True)
+class AgentSpec:
+    name: str
+    description: str
+    system_prompt: str
+    allowed_tools: tuple[str, ...] = field(default_factory=tuple)
+    default_mode: str = "default"
+    max_steps: int = 12
+    spawn_allowed: bool = False
+
+
+@dataclass(slots=True)
+class WorkerRun:
+    worker_id: str
+    node_id: str
+    title: str
+    prompt: str
+    agent_name: str
+    thread_id: str
+    mode: str
+    task_type: str
+    status: str
+    execution_mode: str = "foreground"
+    write_scope: list[str] = field(default_factory=list)
+    summary: str = ""
+    error: str | None = None
+    created_at: float = 0.0
+    updated_at: float = 0.0
+
+
+@dataclass(slots=True)
 class AppServices:
     paths: Any
     db: Any
@@ -166,3 +196,4 @@ class AppServices:
     cost: Any = None
     execution: Any = None
     auto: Any = None
+    agent_name: str = "orchestrator"

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 
 from .bootstrap import bootstrap_services
-from ..features.sessions import format_session_time
+from ..features.sessions import format_session_preview, format_session_time
 from ..ui.tui import run_tui_app
 
 
@@ -78,7 +78,10 @@ def main(argv: list[str] | None = None) -> int:
         for item in services.sessions.list_sessions(
             workspace=services.settings.workspace
         ):
-            print(f"{item.thread_id}\t{format_session_time(item.updated_at)}\t{item.title}")
+            print(
+                f"{item.thread_id}\t{format_session_time(item.updated_at)}"
+                f"\t{format_session_preview(item.title)}"
+            )
         return 0
 
     initial_thread_id: str | None = None

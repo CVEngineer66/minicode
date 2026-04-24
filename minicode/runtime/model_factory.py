@@ -29,7 +29,6 @@ def resolve_model_info(settings: Settings) -> ModelInfo:
 # Three-layer policy:
 #   1. settings.thinking = "on" | "off" -> absolute.
 #   2. settings.thinking = "auto"       -> mode decides:
-#        plan    -> on   (user wants deliberation)
 #        bypass  -> off  (user wants speed / low token spend)
 #        other   -> on   (hybrid-thinking models self-regulate depth)
 #   3. Provider family maps the boolean to the concrete knob each API expects.
@@ -65,11 +64,9 @@ def resolve_thinking_enabled(settings: Settings, mode: str | None) -> bool:
     if policy == "off":
         return False
     # auto: let the mode steer.
-    if mode == "plan":
-        return True
     if mode == "bypass":
         return False
-    # Default / auto modes: let the hybrid-thinking models self-regulate.
+    # Default mode: let the hybrid-thinking models self-regulate.
     return True
 
 

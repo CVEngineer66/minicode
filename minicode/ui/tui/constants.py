@@ -20,7 +20,7 @@ IDS = SimpleNamespace(
     picker_options="picker-options",
 )
 
-AUTO_MODES: tuple[str, ...] = ("default", "auto", "bypass", "plan")
+AUTO_MODES: tuple[str, ...] = ("default", "bypass")
 
 EVENT_KINDS = SimpleNamespace(
     model_call_start="model_call_start",

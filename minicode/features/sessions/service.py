@@ -41,6 +41,14 @@ def format_session_time(updated_at: float, *, now: float | None = None) -> str:
     return f"{absolute} ({relative})"
 
 
+def format_session_preview(title: str, *, max_chars: int = 8) -> str:
+    """Render a compact single-line preview for session list displays."""
+    text = " ".join((title or "").split())
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "..."
+
+
 class SessionService:
     """Session metadata + message checkpoint access with branch/compact/archive.
 

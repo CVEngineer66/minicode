@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
+from minicode.core.types import ToolContext
 from minicode.features.tasks import (
     TaskCycleError,
     TaskGraphError,
@@ -12,6 +14,8 @@ from minicode.features.tasks import (
     TaskState,
     TaskTrackerService,
 )
+from minicode.features.tasks.services import normalize_task_tracker_item
+from minicode.features.tools.builtin import todo_write
 
 
 class _FakeGraphRepo:
@@ -165,3 +169,34 @@ def test_tracker_summary_buckets():
     buckets = svc.summary("w")
     assert buckets["completed"] == 1
     assert buckets["open"] == 1
+
+
+def test_normalize_task_tracker_item_accepts_string() -> None:
+    assert normalize_task_tracker_item("Write README") == {
+        "title": "Write README",
+        "note": "",
+    }
+
+
+def test_normalize_task_tracker_item_accepts_mapping_aliases() -> None:
+    assert normalize_task_tracker_item({"task": "Ship fix", "description": "today"}) == {
+        "title": "Ship fix",
+        "note": "today",
+    }
+
+
+def test_todo_write_accepts_string_items() -> None:
+    tracker = TaskTrackerService(_FakeTrackerRepo())
+    context = ToolContext(
+        thread_id="thread-1",
+        cwd="w",
+        mode="default",
+        services=SimpleNamespace(
+            settings=SimpleNamespace(workspace="w"),
+            task_tracker=tracker,
+        ),
+        emit_event=lambda _kind, _payload: None,
+    )
+    result = todo_write(["Write docs", "Run lint"], context=context)
+    assert json.loads(result.content) == {"saved": ["Write docs", "Run lint"]}
+    assert [item["title"] for item in tracker.list_tasks("w")] == ["Write docs", "Run lint"]

@@ -10,7 +10,7 @@ from minicode.features.execution import ExecutionService
 from minicode.features.hooks import HookService
 from minicode.features.mcp import McpServerRepository, McpService
 from minicode.features.memory import MemoryRepository, MemoryService
-from minicode.features.permissions import ApprovalBroker, DecisionStore, PolicyEngine
+from minicode.features.permissions import ApprovalBroker, DecisionStore, PatternRepository, PolicyEngine
 from minicode.features.profile import ProfileRepository, ProfileService
 from minicode.features.sessions import SessionRepository, SessionService
 from minicode.features.skills import SkillRepository, SkillService
@@ -23,7 +23,7 @@ from minicode.features.tasks import (
     TaskTrackerService,
 )
 from minicode.features.tools import build_builtin_registry
-from minicode.platform.config import ensure_config_scaffold, load_settings
+from minicode.platform.config import ensure_config_scaffold, load_settings, normalize_mode
 from minicode.platform.database import DatabaseManager
 from minicode.platform.migration import Migrator
 from minicode.platform.paths import resolve_paths
@@ -38,7 +38,12 @@ def bootstrap_services(cwd: str) -> AppServices:
     hooks = HookService(runtime_events)
     sessions = SessionService(SessionRepository(db), settings.workspace, settings.model)
     memory = MemoryService(MemoryRepository(db), settings.workspace)
-    permissions = ApprovalBroker(PolicyEngine(), DecisionStore(db))
+    permissions_path = paths.project_dir / "permissions.json"
+    permissions = ApprovalBroker(
+        PolicyEngine(),
+        DecisionStore(permissions_path),
+        PatternRepository(permissions_path),
+    )
     task_tracker = TaskTrackerService(TaskTrackerRepository(db))
     task_graph = TaskGraphService(TaskGraphRepository(db))
     background_tasks = BackgroundTaskService(BackgroundTaskRepository(db), str(paths.logs_dir))
@@ -56,7 +61,7 @@ def bootstrap_services(cwd: str) -> AppServices:
     execution = ExecutionService(
         allowed_roots=[paths.project_dir.parent, paths.global_dir],
     )
-    auto = AutoModeService(PermissionMode.DEFAULT)
+    auto = AutoModeService(PermissionMode(normalize_mode(settings.auto_mode)))
     services = AppServices(
         paths=paths,
         db=db,
@@ -83,5 +88,4 @@ def bootstrap_services(cwd: str) -> AppServices:
     services.migrator = Migrator(paths, db, sessions, memory, permissions, skills, mcp, task_tracker, task_graph)
     services.migrator.migrate_once()
     services.tools = build_builtin_registry(services)
-    collaboration.register_agent("main", "Primary coding agent", ["coding", "review"])
     return services

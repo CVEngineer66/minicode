@@ -35,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _make_runner(services) -> "callable":  # type: ignore[type-arg]
     def _run(job: CronJob) -> str | None:
-        result = run_turn(services=services, prompt=job.prompt, mode="auto")
+        result = run_turn(services=services, prompt=job.prompt, mode="default")
         if result.error:
             _log.warning("cron job %s returned error: %s", job.name, result.error)
         return result.final_text
